@@ -1,0 +1,10 @@
+# Ignore the art folder
+captured_art/
+
+# Ignore Python compiled files (junk)
+__pycache__/
+*.pyc
+
+# Ignore OS junk
+Thumbs.db
+.DS_Store
