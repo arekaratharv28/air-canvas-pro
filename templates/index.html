@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Protocol: AIR_CANVAS_PRO</title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Rajdhani:wght@500&display=swap" rel="stylesheet">
+
+    <style>
+        body { font-family: 'Rajdhani', sans-serif; background-color: #050505; overflow: hidden; }
+        .hud-font { font-family: 'Orbitron', sans-serif; }
+        .mirror { transform: scaleX(-1); }
+        
+        .glass-panel {
+            background: rgba(10, 10, 15, 0.75);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(0, 255, 200, 0.2);
+            box-shadow: 0 0 15px rgba(0, 255, 200, 0.1);
+        }
+        
+        .btn-tool { transition: all 0.2s; border: 1px solid transparent; }
+        .btn-tool:hover { transform: scale(1.1); box-shadow: 0 0 10px currentColor; }
+        .btn-tool.active { border-color: white; box-shadow: 0 0 15px currentColor; }
+    </style>
+</head>
+<body class="text-white">
+
+    <div class="absolute top-0 left-0 w-full p-4 z-50 flex justify-between items-center pointer-events-none">
+        <div class="pointer-events-auto flex items-center gap-3">
+            <div class="h-10 w-1 bg-cyan-400 animate-pulse"></div>
+            <div>
+                <h1 class="text-2xl font-bold hud-font tracking-widest text-cyan-400">AIR CANVAS <span class="text-xs text-gray-400">PRO</span></h1>
+                <p id="sys-status" class="text-sm text-gray-300">SYSTEM: <span class="text-yellow-400">INITIALIZING...</span></p>
+            </div>
+        </div>
+        
+        <div class="pointer-events-auto flex gap-3">
+            <button onclick="clearCanvas()" class="glass-panel px-6 py-2 rounded text-red-400 font-bold hover:bg-red-900/30">WIPE</button>
+            <button onclick="saveArt()" class="glass-panel px-6 py-2 rounded text-cyan-400 font-bold hover:bg-cyan-900/30">SAVE</button>
+        </div>
+    </div>
+
+    <div class="absolute left-4 top-1/2 -translate-y-1/2 z-50 flex flex-col gap-4 pointer-events-auto glass-panel p-3 rounded-xl">
+        <div class="text-center text-xs text-gray-400 hud-font mb-2">COLOR</div>
+        <button onclick="setColor('#00ffff')" class="btn-tool w-10 h-10 rounded-full bg-cyan-400 shadow-lg active" style="color:#00ffff"></button>
+        <button onclick="setColor('#ff00ff')" class="btn-tool w-10 h-10 rounded-full bg-fuchsia-500 shadow-lg" style="color:#ff00ff"></button>
+        <button onclick="setColor('#ffff00')" class="btn-tool w-10 h-10 rounded-full bg-yellow-400 shadow-lg" style="color:#ffff00"></button>
+        <button onclick="setColor('#00ff00')" class="btn-tool w-10 h-10 rounded-full bg-green-500 shadow-lg" style="color:#00ff00"></button>
+        
+        <div class="h-px bg-gray-600 my-2"></div>
+        <div class="text-center text-xs text-gray-400 hud-font">DEPTH</div>
+        <div class="w-10 h-32 bg-gray-800 rounded relative overflow-hidden">
+            <div id="depth-bar" class="absolute bottom-0 w-full bg-cyan-400 opacity-50 transition-all duration-100" style="height: 50%"></div>
+        </div>
+    </div>
+
+    <div id="gallery-panel" class="absolute right-4 top-20 bottom-20 w-48 glass-panel z-40 rounded-xl overflow-hidden flex flex-col pointer-events-auto transition-transform translate-x-full hover:translate-x-0 opacity-90">
+        <div class="p-3 bg-cyan-900/30 text-center font-bold hud-font border-b border-cyan-500/30">ARCHIVES</div>
+        <div id="gallery-content" class="flex-1 overflow-y-auto p-2 space-y-2"></div>
+        <button onclick="loadGallery()" class="p-2 text-xs text-center bg-cyan-900/50 hover:bg-cyan-800 text-cyan-300">↻ REFRESH</button>
+    </div>
+
+    <div class="relative w-screen h-screen">
+        <video id="input_video" class="mirror absolute inset-0 w-full h-full object-cover opacity-60"></video>
+        <canvas id="output_canvas" class="mirror absolute inset-0 w-full h-full"></canvas>
+    </div>
+
+    <script>
+        const videoElement = document.getElementById('input_video');
+        const canvasElement = document.getElementById('output_canvas');
+        const canvasCtx = canvasElement.getContext('2d');
+        const statusText = document.getElementById('sys-status');
+        const depthBar = document.getElementById('depth-bar');
+        
+        canvasElement.width = window.innerWidth;
+        canvasElement.height = window.innerHeight;
+        
+        let currentInfo = { color: '#00ffff', width: 8 };
+        let points = [];
+        let cursor = { x: 0, y: 0, active: false };
+
+        // Helper: Calculate distance between two landmarks
+        function distance(p1, p2) {
+            return Math.hypot(p1.x - p2.x, p1.y - p2.y);
+        }
+
+        function onResults(results) {
+            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const landmarks = results.multiHandLandmarks[0];
+                
+                // Key Landmarks
+                const thumbTip = landmarks[4];
+                const indexTip = landmarks[8];
+                const wrist = landmarks[0];
+                const middleMCP = landmarks[9]; // Knuckle
+
+                // 1. Calculate Pinch (Thumb to Index)
+                const pinchDist = distance(thumbTip, indexTip);
+                const isPinching = pinchDist < 0.05; // Threshold for "touching"
+
+                // 2. Calculate Depth (Size)
+                // We use distance between Wrist and Middle Knuckle as a stable proxy for hand size (depth)
+                const handSize = distance(wrist, middleMCP); 
+                // Map handSize (approx 0.1 to 0.4) to Line Width (2 to 25)
+                const depthFactor = Math.max(0, Math.min(1, (handSize - 0.1) * 4)); // Normalize 0-1
+                const dynamicWidth = 2 + (depthFactor * 30);
+                
+                // Update UI Depth Bar
+                depthBar.style.height = `${depthFactor * 100}%`;
+
+                // 3. Set Cursor Position (Midpoint of pinch)
+                cursor.x = ((thumbTip.x + indexTip.x) / 2) * canvasElement.width;
+                cursor.y = ((thumbTip.y + indexTip.y) / 2) * canvasElement.height;
+                cursor.active = true;
+
+                if (isPinching) {
+                    statusText.innerHTML = `SYSTEM: <span class="text-green-400">INKING...</span>`;
+                    points.push({ 
+                        x: cursor.x, 
+                        y: cursor.y, 
+                        color: currentInfo.color, 
+                        width: dynamicWidth, // Use the dynamic depth width
+                        newStroke: false 
+                    });
+                } else {
+                    statusText.innerHTML = `SYSTEM: <span class="text-cyan-400">HOVERING</span>`;
+                    if (points.length > 0) points[points.length - 1].newStroke = true;
+                }
+            } else {
+                cursor.active = false;
+                statusText.innerHTML = `SYSTEM: <span class="text-red-400">NO SIGNAL</span>`;
+            }
+
+            drawCanvas();
+            drawCursor(currentInfo.color);
+        }
+
+        function drawCanvas() {
+            for (let i = 1; i < points.length; i++) {
+                const p1 = points[i - 1];
+                const p2 = points[i];
+                if (p1.newStroke) continue;
+
+                canvasCtx.beginPath();
+                canvasCtx.moveTo(p1.x, p1.y);
+                canvasCtx.lineTo(p2.x, p2.y);
+                canvasCtx.strokeStyle = p1.color;
+                canvasCtx.lineWidth = p1.width; // The saved width creates the "tapering" effect
+                canvasCtx.lineCap = "round";
+                canvasCtx.lineJoin = "round";
+                canvasCtx.stroke();
+            }
+        }
+
+        function drawCursor(color) {
+            if (!cursor.active) return;
+            canvasCtx.beginPath();
+            canvasCtx.arc(cursor.x, cursor.y, 10, 0, 2 * Math.PI);
+            canvasCtx.strokeStyle = "white";
+            canvasCtx.lineWidth = 2;
+            canvasCtx.stroke();
+            canvasCtx.fillStyle = color; // Fill with active color
+            canvasCtx.fill();
+        }
+
+        // --- Tools ---
+        function setColor(color) {
+            currentInfo.color = color;
+            document.querySelectorAll('.btn-tool').forEach(btn => {
+                btn.classList.toggle('active', btn.style.color === color);
+            });
+        }
+
+        function clearCanvas() { points = []; }
+
+        // --- Backend Comm ---
+        function saveArt() {
+            const dataURL = canvasElement.toDataURL('image/png');
+            statusText.innerHTML = `SYSTEM: <span class="text-yellow-400">UPLOADING...</span>`;
+            fetch('/upload', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ image: dataURL })
+            })
+            .then(res => res.json())
+            .then(data => {
+                statusText.innerHTML = `SYSTEM: <span class="text-green-400">SAVED</span>`;
+                loadGallery();
+            });
+        }
+
+        function loadGallery() {
+            fetch('/gallery')
+            .then(res => res.json())
+            .then(files => {
+                const container = document.getElementById('gallery-content');
+                container.innerHTML = "";
+                files.forEach(file => {
+                    const img = document.createElement('img');
+                    img.src = `/art/${file}`;
+                    img.className = "w-full rounded border border-gray-700 hover:border-cyan-400 transition cursor-pointer";
+                    img.onclick = () => window.open(img.src, '_blank');
+                    container.appendChild(img);
+                });
+            });
+        }
+
+        // --- Init ---
+        const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+        hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7, minTrackingConfidence: 0.7 });
+        hands.onResults(onResults);
+
+        const camera = new Camera(videoElement, {
+            onFrame: async () => { await hands.send({image: videoElement}); },
+            width: 1280, height: 720
+        });
+        camera.start();
+        loadGallery();
+    </script>
+</body>
+</html>
