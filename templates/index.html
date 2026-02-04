@@ -3,209 +3,170 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Protocol: AIR_CANVAS_V3</title>
+    <title>Protocol: AIR_CANVAS_V6</title>
     
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     
     <style>
-        body { background-color: #050505; overflow: hidden; font-family: sans-serif; }
+        body { background-color: #050505; overflow: hidden; font-family: monospace; }
         .mirror { transform: scaleX(-1); }
         
-        /* Glassmorphism UI */
-        .glass { 
-            background: rgba(20, 20, 25, 0.85); 
-            backdrop-filter: blur(12px); 
-            border: 1px solid rgba(255,255,255,0.1);
-            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
-        }
+        /* Layering System */
+        #container { position: relative; width: 100vw; height: 100vh; }
         
-        input[type="color"] {
-            -webkit-appearance: none; border: none; width: 45px; height: 45px;
-            border-radius: 50%; cursor: pointer; padding: 0; overflow: hidden;
-            border: 2px solid rgba(255,255,255,0.2);
-        }
-        input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
-        input[type="color"]::-webkit-color-swatch { border: none; }
+        /* Layer 1: Video (Bottom) */
+        #input_video { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; z-index: 0; opacity: 0.6; }
+        
+        /* Layer 2: Ink (Middle) - Stores the drawings */
+        #ink_canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 10; }
+        
+        /* Layer 3: Cursor (Top) - Shows the hand pointer */
+        #cursor_canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 20; pointer-events: none; }
+        
+        .glass { background: rgba(0, 0, 0, 0.8); border: 1px solid rgba(0, 255, 0, 0.3); backdrop-filter: blur(4px); }
     </style>
 </head>
 <body class="text-white">
 
-    <div class="absolute top-0 left-0 w-full p-4 z-50 flex justify-between items-start pointer-events-none">
-        <div class="pointer-events-auto flex flex-col gap-2">
-            <div class="glass p-3 rounded-xl flex items-center gap-3">
-                <div class="h-3 w-3 rounded-full bg-cyan-400 animate-pulse"></div>
-                <div>
-                    <h1 class="font-bold text-cyan-400 text-lg tracking-widest">AIR CANVAS <span class="text-yellow-400 text-xs">V3</span></h1>
-                    <p id="status" class="text-xs text-gray-400 font-mono">SYSTEM READY</p>
-                </div>
-            </div>
-            
-            <div class="glass p-3 rounded-xl flex flex-col gap-3">
-                <div class="text-[10px] text-gray-400 font-bold tracking-widest text-center">PEN COLOR</div>
-                <input type="color" id="colorPicker" value="#00ffff" onchange="updateColor(this.value)">
-                
-                <div class="w-full h-px bg-gray-700"></div>
-                
-                <div class="text-[10px] text-gray-400 font-bold tracking-widest text-center">SIZE</div>
-                <input type="range" min="2" max="25" value="6" class="w-full accent-cyan-400 h-1 rounded-lg cursor-pointer" oninput="updateWidth(this.value)">
-            </div>
-        </div>
-
-        <div class="pointer-events-auto flex gap-2">
-            <button onclick="clearCanvas()" class="glass px-4 py-2 rounded-lg text-red-400 font-bold hover:bg-red-900/40 text-sm transition">WIPE</button>
-            <button onclick="saveArt()" class="glass px-4 py-2 rounded-lg text-green-400 font-bold hover:bg-green-900/40 text-sm transition">SAVE</button>
+    <div class="absolute top-0 left-0 w-full p-2 z-50 pointer-events-none">
+        <div class="glass p-2 rounded max-w-xs pointer-events-auto">
+            <h1 class="text-green-400 font-bold">V6: LAYERED ENGINE</h1>
+            <p id="debug-log" class="text-xs text-gray-300">SYSTEM INITIALIZING...</p>
         </div>
     </div>
 
-    <div class="relative w-screen h-screen">
-        <video id="input_video" class="mirror absolute inset-0 w-full h-full object-cover opacity-60"></video>
-        <canvas id="output_canvas" class="mirror absolute inset-0 w-full h-full"></canvas>
+    <div class="absolute bottom-6 left-0 w-full flex justify-center gap-4 z-50 pointer-events-auto">
+        <input type="color" id="colorPicker" value="#00ffff" class="w-12 h-12 rounded-full border-2 border-white cursor-pointer bg-black" onchange="updateColor(this.value)">
+        <button onclick="wipeInk()" class="bg-red-600 hover:bg-red-500 text-white px-6 py-2 rounded-full font-bold shadow-[0_0_15px_rgba(255,0,0,0.5)] transition">WIPE</button>
+        <button onclick="saveArt()" class="bg-blue-600 hover:bg-blue-500 text-white px-6 py-2 rounded-full font-bold shadow-[0_0_15px_rgba(0,0,255,0.5)] transition">SAVE</button>
+    </div>
+
+    <div id="container">
+        <video id="input_video" class="mirror" autoplay playsinline></video>
+        <canvas id="ink_canvas" class="mirror"></canvas>
+        <canvas id="cursor_canvas" class="mirror"></canvas>
     </div>
 
     <script>
         const videoElement = document.getElementById('input_video');
-        const canvasElement = document.getElementById('output_canvas');
-        const canvasCtx = canvasElement.getContext('2d');
-        const statusText = document.getElementById('status');
+        const inkCanvas = document.getElementById('ink_canvas');
+        const inkCtx = inkCanvas.getContext('2d');
+        const cursorCanvas = document.getElementById('cursor_canvas');
+        const cursorCtx = cursorCanvas.getContext('2d');
+        const debugLog = document.getElementById('debug-log');
         
-        canvasElement.width = window.innerWidth;
-        canvasElement.height = window.innerHeight;
-        
-        // --- Drawing Engine Settings ---
+        // Resize Handler
+        function resize() {
+            inkCanvas.width = window.innerWidth;
+            inkCanvas.height = window.innerHeight;
+            cursorCanvas.width = window.innerWidth;
+            cursorCanvas.height = window.innerHeight;
+            // Setup Ink Context style
+            inkCtx.lineCap = "round";
+            inkCtx.lineJoin = "round";
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
         let globalColor = '#00ffff';
-        let globalWidth = 6;
-        
-        // State Management for Multiple Hands
-        // Structure: { [handIndex]: { isDrawing: false, buffer: [], lastPoint: null } }
         let handStates = {}; 
 
-        // 1. PINCH HYSTERESIS (The Fix for Breaking Lines)
-        // You must pinch tighter to start (0.03) than to stop (0.06). 
-        // This creates a "sticky" state so minor jitters don't break the line.
-        const PINCH_START_THRESHOLD = 0.035;
-        const PINCH_STOP_THRESHOLD = 0.065;
-        
-        // 2. SMOOTHING (Moving Average)
-        const SMOOTHING_BUFFER_SIZE = 4; 
+        // CONFIGURATION
+        const PINCH_THRESHOLD = 0.06; // < 0.06 = Draw
+        const RELEASE_THRESHOLD = 0.08; // > 0.08 = Stop (Hysteresis)
 
-        function getSmoothedPoint(handIndex, rawPoint) {
-            let state = handStates[handIndex];
-            state.buffer.push(rawPoint);
-            if (state.buffer.length > SMOOTHING_BUFFER_SIZE) state.buffer.shift();
-
-            let sumX = 0, sumY = 0;
-            for (let p of state.buffer) { sumX += p.x; sumY += p.y; }
-            return { x: sumX / state.buffer.length, y: sumY / state.buffer.length };
+        function distance(p1, p2) {
+            return Math.hypot(p1.x - p2.x, p1.y - p2.y);
         }
 
         function onResults(results) {
-            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+            // CRITICAL FIX: We do NOT draw results.image onto inkCanvas.
+            // We ONLY clear the cursor canvas so the cursor can move.
+            cursorCtx.clearRect(0, 0, cursorCanvas.width, cursorCanvas.height);
 
             if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-                statusText.innerText = `TRACKING ${results.multiHandLandmarks.length} HANDS`;
-                statusText.className = "text-xs text-green-400 font-mono";
+                let debugMsg = "";
 
-                // Iterate over ALL detected hands
-                for (let i = 0; i < results.multiHandLandmarks.length; i++) {
-                    const landmarks = results.multiHandLandmarks[i];
-                    
-                    // Initialize hand state if new
-                    if (!handStates[i]) {
-                        handStates[i] = { isDrawing: false, buffer: [], lastPoint: null };
-                    }
-                    const state = handStates[i];
+                results.multiHandLandmarks.forEach((landmarks, i) => {
+                    if (!handStates[i]) handStates[i] = { isDrawing: false, lastPoint: null };
+                    let state = handStates[i];
 
                     const thumbTip = landmarks[4];
                     const indexTip = landmarks[8];
-
-                    // --- Logic Step A: Calculate Distance ---
-                    const distance = Math.hypot(thumbTip.x - indexTip.x, thumbTip.y - indexTip.y);
-
-                    // --- Logic Step B: Hysteresis (Sticky Switch) ---
-                    if (!state.isDrawing && distance < PINCH_START_THRESHOLD) {
-                        state.isDrawing = true; // Start Line
-                    } else if (state.isDrawing && distance > PINCH_STOP_THRESHOLD) {
-                        state.isDrawing = false; // Stop Line
-                        state.buffer = []; // Clear smoothing buffer on lift
-                        state.lastPoint = null;
+                    
+                    // 1. Calculate Pinch
+                    const dist = distance(thumbTip, indexTip);
+                    
+                    // 2. Sticky Logic (Hysteresis)
+                    if (!state.isDrawing && dist < PINCH_THRESHOLD) {
+                        state.isDrawing = true;
+                    } else if (state.isDrawing && dist > RELEASE_THRESHOLD) {
+                        state.isDrawing = false;
+                        state.lastPoint = null; // Lift pen
                     }
 
-                    // --- Logic Step C: Position & Smoothing ---
-                    const rawX = ((thumbTip.x + indexTip.x) / 2) * canvasElement.width;
-                    const rawY = ((thumbTip.y + indexTip.y) / 2) * canvasElement.height;
-                    const smoothPoint = getSmoothedPoint(i, {x: rawX, y: rawY});
+                    // 3. Status Text
+                    const colorClass = state.isDrawing ? "text-green-400 font-bold" : "text-gray-400";
+                    debugMsg += `<div class="${colorClass}">Hand ${i}: ${state.isDrawing ? "DRAWING" : "HOVER"} (${dist.toFixed(2)})</div>`;
 
-                    // --- Logic Step D: Rendering ---
-                    drawCursor(smoothPoint, state.isDrawing, globalColor);
+                    // 4. Coordinates
+                    const x = ((thumbTip.x + indexTip.x) / 2) * inkCanvas.width;
+                    const y = ((thumbTip.y + indexTip.y) / 2) * inkCanvas.height;
 
+                    // 5. Draw CURSOR (On Top Layer)
+                    cursorCtx.beginPath();
+                    cursorCtx.arc(x, y, state.isDrawing ? 5 : 10, 0, 2 * Math.PI);
+                    cursorCtx.strokeStyle = "white";
+                    cursorCtx.lineWidth = 2;
+                    cursorCtx.stroke();
+                    if (state.isDrawing) {
+                        cursorCtx.fillStyle = globalColor;
+                        cursorCtx.fill();
+                    }
+
+                    // 6. Draw INK (On Middle Layer - Persistent)
                     if (state.isDrawing) {
                         if (state.lastPoint) {
-                            canvasCtx.beginPath();
-                            canvasCtx.moveTo(state.lastPoint.x, state.lastPoint.y);
-                            canvasCtx.lineTo(smoothPoint.x, smoothPoint.y);
-                            canvasCtx.strokeStyle = globalColor;
-                            canvasCtx.lineWidth = globalWidth;
-                            canvasCtx.lineCap = "round";
-                            canvasCtx.lineJoin = "round";
-                            canvasCtx.stroke();
+                            inkCtx.beginPath();
+                            inkCtx.moveTo(state.lastPoint.x, state.lastPoint.y);
+                            inkCtx.lineTo(x, y);
+                            inkCtx.strokeStyle = globalColor;
+                            inkCtx.lineWidth = 8; // Thick visible line
+                            inkCtx.stroke();
                         }
-                        state.lastPoint = smoothPoint;
+                        state.lastPoint = {x, y};
                     }
-                }
+                });
+                debugLog.innerHTML = debugMsg;
             } else {
-                statusText.innerText = "NO HANDS DETECTED";
-                statusText.className = "text-xs text-red-400 font-mono";
-                // Don't clear handStates immediately to prevent flickering, 
-                // but if empty for too long, maybe we should. For now, this is safer.
+                debugLog.innerHTML = "NO HANDS DETECTED";
             }
         }
 
-        function drawCursor(point, active, color) {
-            canvasCtx.beginPath();
-            canvasCtx.arc(point.x, point.y, active ? 3 : 8, 0, 2 * Math.PI);
-            canvasCtx.strokeStyle = "rgba(255, 255, 255, 0.8)";
-            canvasCtx.lineWidth = 2;
-            canvasCtx.stroke();
-            if (active) {
-                canvasCtx.fillStyle = color;
-                canvasCtx.fill();
-            }
-        }
-
-        // Tools
         function updateColor(val) { globalColor = val; }
-        function updateWidth(val) { globalWidth = val; }
-        function clearCanvas() { 
-            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height); 
-            handStates = {}; // Reset logic
+        
+        function wipeInk() { 
+            // Only clear the Ink layer, not the video or cursor
+            inkCtx.clearRect(0, 0, inkCanvas.width, inkCanvas.height);
+            handStates = {};
         }
 
-        // Backend Save
         function saveArt() {
-            const dataURL = canvasElement.toDataURL('image/png');
-            statusText.innerText = "UPLOADING TO CLOUD...";
+            // To save, we must composite the Ink onto a white background (or transparent)
+            const dataURL = inkCanvas.toDataURL('image/png');
             fetch('/upload', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ image: dataURL })
-            }).then(res => res.json()).then(data => {
-                statusText.innerText = "SAVED: " + data.filename;
-                setTimeout(() => statusText.innerText = "SYSTEM READY", 2000);
             });
+            debugLog.innerHTML = "<span class='text-blue-400'>SAVED TO CLOUD!</span>";
         }
 
-        // Initialization
         const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
-        
-        // SETTING MAX HANDS TO 4 (Optimized for Party Mode)
-        hands.setOptions({ 
-            maxNumHands: 4, 
-            modelComplexity: 1, 
-            minDetectionConfidence: 0.6, // Lowered slightly to catch fast hands
-            minTrackingConfidence: 0.6 
-        });
+        // Optimized for fast tracking
+        hands.setOptions({ maxNumHands: 4, minDetectionConfidence: 0.6, minTrackingConfidence: 0.6 });
         hands.onResults(onResults);
 
         const camera = new Camera(videoElement, {
