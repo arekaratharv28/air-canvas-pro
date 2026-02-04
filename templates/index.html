@@ -3,177 +3,316 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Protocol: AIR_CANVAS_V6</title>
+    <title>Protocol: AIR_CANVAS_V8</title>
     
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/hands.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
-    
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
     <style>
-        body { background-color: #050505; overflow: hidden; font-family: monospace; }
+        body { margin: 0; padding: 0; background-color: #050505; overflow: hidden; font-family: 'Segoe UI', sans-serif; }
         .mirror { transform: scaleX(-1); }
         
-        /* Layering System */
-        #container { position: relative; width: 100vw; height: 100vh; }
+        /* HUD Glass Effect */
+        .glass-panel { 
+            background: rgba(15, 23, 42, 0.65); 
+            backdrop-filter: blur(20px); 
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255,255,255,0.08);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+        }
+
+        /* Animations */
+        .swatch { transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1); }
+        .swatch:hover { transform: translateY(-4px) scale(1.1); box-shadow: 0 0 10px currentColor; }
+        .swatch.active { ring: 2px solid white; transform: scale(1.2); box-shadow: 0 0 15px currentColor; z-index: 10; }
         
-        /* Layer 1: Video (Bottom) */
-        #input_video { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; z-index: 0; opacity: 0.6; }
+        #realColorPicker { opacity: 0; position: absolute; inset: 0; cursor: pointer; }
         
-        /* Layer 2: Ink (Middle) - Stores the drawings */
-        #ink_canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 10; }
-        
-        /* Layer 3: Cursor (Top) - Shows the hand pointer */
-        #cursor_canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 20; pointer-events: none; }
-        
-        .glass { background: rgba(0, 0, 0, 0.8); border: 1px solid rgba(0, 255, 0, 0.3); backdrop-filter: blur(4px); }
+        /* Gallery Scrollbar */
+        .gallery-scroll::-webkit-scrollbar { width: 4px; }
+        .gallery-scroll::-webkit-scrollbar-track { background: transparent; }
+        .gallery-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 4px; }
+
+        /* Gallery Item Hover */
+        .gallery-item:hover .gallery-overlay { opacity: 1; }
     </style>
 </head>
-<body class="text-white">
+<body class="text-white selection:bg-cyan-500 selection:text-black">
 
-    <div class="absolute top-0 left-0 w-full p-2 z-50 pointer-events-none">
-        <div class="glass p-2 rounded max-w-xs pointer-events-auto">
-            <h1 class="text-green-400 font-bold">V6: LAYERED ENGINE</h1>
-            <p id="debug-log" class="text-xs text-gray-300">SYSTEM INITIALIZING...</p>
+    <div class="absolute inset-x-0 top-0 z-50 pointer-events-none p-6 flex flex-col gap-4">
+        
+        <div class="flex justify-between items-start">
+            <div class="glass-panel px-5 py-3 rounded-2xl flex items-center gap-4 pointer-events-auto">
+                <div class="relative">
+                    <div id="sys-dot" class="h-3 w-3 rounded-full bg-red-500 animate-pulse"></div>
+                    <div id="sys-ping" class="absolute -inset-1 rounded-full bg-red-500 opacity-20 animate-ping"></div>
+                </div>
+                <div>
+                    <h1 class="font-bold text-white text-sm tracking-[0.2em] flex items-center gap-2">
+                        AIR CANVAS <span class="bg-cyan-500/10 text-cyan-400 px-1.5 py-0.5 rounded text-[10px]">V8</span>
+                    </h1>
+                    <p id="status" class="text-[10px] text-slate-400 font-mono mt-0.5">SYSTEM STARTUP...</p>
+                </div>
+            </div>
+
+            <div class="flex gap-3 pointer-events-auto">
+                <button onclick="wipeCanvas()" class="glass-panel w-12 h-12 rounded-xl flex items-center justify-center text-red-400 hover:bg-red-500/20 hover:text-white transition group border-red-500/10 hover:border-red-500/50">
+                    <i class="fa-solid fa-trash-can text-lg group-hover:rotate-12 transition"></i>
+                </button>
+                <button onclick="saveArt()" class="glass-panel w-12 h-12 rounded-xl flex items-center justify-center text-cyan-400 hover:bg-cyan-500/20 hover:text-white transition group border-cyan-500/10 hover:border-cyan-500/50">
+                    <i class="fa-solid fa-camera text-lg group-hover:scale-110 transition"></i>
+                </button>
+            </div>
+        </div>
+
+        <div class="flex justify-center pointer-events-auto">
+            <div class="glass-panel p-1.5 rounded-full flex items-center gap-2 pr-2 shadow-2xl shadow-cyan-900/10">
+                
+                <div class="relative group mr-2">
+                    <div class="w-10 h-10 rounded-full bg-gradient-to-tr from-slate-700 to-slate-600 flex items-center justify-center border border-white/10 group-hover:border-white/30 transition overflow-hidden">
+                        <i class="fa-solid fa-plus text-white/50 text-xs"></i>
+                        <div id="picker-preview" class="absolute inset-0 opacity-50"></div>
+                    </div>
+                    <input type="color" id="realColorPicker" oninput="setCustomColor(this.value)">
+                </div>
+
+                <div class="w-px h-6 bg-white/10 mx-1"></div>
+
+                <div class="flex gap-2 px-2" id="palette"></div>
+            </div>
         </div>
     </div>
 
-    <div class="absolute bottom-6 left-0 w-full flex justify-center gap-4 z-50 pointer-events-auto">
-        <input type="color" id="colorPicker" value="#00ffff" class="w-12 h-12 rounded-full border-2 border-white cursor-pointer bg-black" onchange="updateColor(this.value)">
-        <button onclick="wipeInk()" class="bg-red-600 hover:bg-red-500 text-white px-6 py-2 rounded-full font-bold shadow-[0_0_15px_rgba(255,0,0,0.5)] transition">WIPE</button>
-        <button onclick="saveArt()" class="bg-blue-600 hover:bg-blue-500 text-white px-6 py-2 rounded-full font-bold shadow-[0_0_15px_rgba(0,0,255,0.5)] transition">SAVE</button>
+    <div class="absolute top-24 bottom-6 right-6 w-64 z-40 pointer-events-none flex flex-col items-end">
+        <div class="glass-panel w-full h-full rounded-2xl pointer-events-auto flex flex-col overflow-hidden border-slate-700/50">
+            <div class="p-4 border-b border-white/5 bg-white/5 backdrop-blur-sm">
+                <h2 class="text-xs font-bold tracking-widest text-slate-300 flex items-center gap-2">
+                    <i class="fa-solid fa-images text-cyan-400"></i> NEURAL GALLERY
+                </h2>
+            </div>
+            
+            <div id="gallery-container" class="flex-1 overflow-y-auto p-3 space-y-3 gallery-scroll">
+                <div id="empty-state" class="h-full flex flex-col items-center justify-center text-slate-600 gap-2 opacity-50">
+                    <i class="fa-solid fa-shapes text-2xl"></i>
+                    <span class="text-[10px] tracking-widest">NO DATA CAPTURED</span>
+                </div>
+            </div>
+        </div>
     </div>
 
-    <div id="container">
-        <video id="input_video" class="mirror" autoplay playsinline></video>
-        <canvas id="ink_canvas" class="mirror"></canvas>
-        <canvas id="cursor_canvas" class="mirror"></canvas>
+    <div class="relative w-screen h-screen bg-black">
+        <video id="input_video" class="mirror absolute inset-0 w-full h-full object-cover opacity-50 z-0"></video>
+        <canvas id="ink_canvas" class="mirror absolute inset-0 w-full h-full z-10"></canvas>
+        <canvas id="cursor_canvas" class="mirror absolute inset-0 w-full h-full z-20"></canvas>
     </div>
 
     <script>
-        const videoElement = document.getElementById('input_video');
+        const video = document.getElementById('input_video');
         const inkCanvas = document.getElementById('ink_canvas');
         const inkCtx = inkCanvas.getContext('2d');
         const cursorCanvas = document.getElementById('cursor_canvas');
         const cursorCtx = cursorCanvas.getContext('2d');
-        const debugLog = document.getElementById('debug-log');
+        const statusText = document.getElementById('status');
+        const sysDot = document.getElementById('sys-dot');
+        const sysPing = document.getElementById('sys-ping');
+        const galleryContainer = document.getElementById('gallery-container');
+        const emptyState = document.getElementById('empty-state');
         
-        // Resize Handler
-        function resize() {
-            inkCanvas.width = window.innerWidth;
-            inkCanvas.height = window.innerHeight;
-            cursorCanvas.width = window.innerWidth;
-            cursorCanvas.height = window.innerHeight;
-            // Setup Ink Context style
-            inkCtx.lineCap = "round";
-            inkCtx.lineJoin = "round";
+        // --- CONFIG ---
+        const PALETTE = ['#ef4444', '#f59e0b', '#eab308', '#22c55e', '#06b6d4', '#3b82f6', '#a855f7', '#ec4899', '#ffffff'];
+        let globalColor = '#06b6d4'; 
+        let handStates = {};
+        
+        // Depth Config
+        const MIN_DEPTH = -0.15; 
+        const MAX_DEPTH = 0.05; 
+        const MIN_WIDTH = 2;
+        const MAX_WIDTH = 20;
+
+        // --- INIT UI ---
+        const paletteContainer = document.getElementById('palette');
+        
+        // Generate Palette
+        PALETTE.forEach(color => {
+            const btn = document.createElement('button');
+            btn.className = `swatch w-8 h-8 rounded-full cursor-pointer border border-white/10 shadow-lg ${color === globalColor ? 'active' : ''}`;
+            btn.style.backgroundColor = color;
+            btn.style.color = color; // For box-shadow inheritance
+            btn.onclick = () => setColor(color, btn);
+            paletteContainer.appendChild(btn);
+        });
+
+        function setColor(color, btnElement = null) {
+            globalColor = color;
+            document.querySelectorAll('.swatch').forEach(b => b.classList.remove('active'));
+            if(btnElement) btnElement.classList.add('active');
+            
+            // Update picker preview background
+            document.getElementById('picker-preview').style.backgroundColor = color;
+        }
+
+        function setCustomColor(color) {
+            globalColor = color;
+            document.querySelectorAll('.swatch').forEach(b => b.classList.remove('active'));
+            document.getElementById('picker-preview').style.backgroundColor = color;
+            document.getElementById('picker-preview').style.opacity = '1';
+        }
+
+        function resize() { 
+            inkCanvas.width = window.innerWidth; inkCanvas.height = window.innerHeight;
+            cursorCanvas.width = window.innerWidth; cursorCanvas.height = window.innerHeight;
         }
         window.addEventListener('resize', resize);
         resize();
 
-        let globalColor = '#00ffff';
-        let handStates = {}; 
+        // --- GALLERY LOGIC ---
+        function saveArt() {
+            // 1. Visual Feedback
+            statusText.innerText = "CAPTURING CANVAS...";
+            statusText.classList.add("text-cyan-400");
+            
+            // 2. Capture Data
+            // Note: Canvas is mirrored via CSS, but toDataURL gets raw pixels (unmirrored).
+            // This is usually fine, but if you want the image to look exactly like the screen:
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = inkCanvas.width;
+            tempCanvas.height = inkCanvas.height;
+            const tempCtx = tempCanvas.getContext('2d');
+            
+            // Flip the temp canvas context to match the CSS mirror
+            tempCtx.translate(tempCanvas.width, 0);
+            tempCtx.scale(-1, 1);
+            
+            // Draw the ink canvas onto the temp canvas
+            tempCtx.drawImage(inkCanvas, 0, 0);
+            
+            const dataUrl = tempCanvas.toDataURL('image/png');
 
-        // CONFIGURATION
-        const PINCH_THRESHOLD = 0.06; // < 0.06 = Draw
-        const RELEASE_THRESHOLD = 0.08; // > 0.08 = Stop (Hysteresis)
+            // 3. Update UI
+            if(emptyState) emptyState.style.display = 'none';
 
-        function distance(p1, p2) {
-            return Math.hypot(p1.x - p2.x, p1.y - p2.y);
+            const div = document.createElement('div');
+            div.className = "gallery-item relative group w-full aspect-video bg-black/50 rounded-lg overflow-hidden border border-white/10 shrink-0 animate-[fadeIn_0.5s_ease-out]";
+            div.innerHTML = `
+                <img src="${dataUrl}" class="w-full h-full object-contain">
+                <div class="gallery-overlay absolute inset-0 bg-black/60 opacity-0 transition-opacity duration-200 flex items-center justify-center gap-3 backdrop-blur-[2px]">
+                    <a href="${dataUrl}" download="air_canvas_${Date.now()}.png" class="w-8 h-8 rounded-full bg-white text-black flex items-center justify-center hover:scale-110 transition">
+                        <i class="fa-solid fa-download text-xs"></i>
+                    </a>
+                    <button onclick="this.closest('.gallery-item').remove()" class="w-8 h-8 rounded-full bg-red-500 text-white flex items-center justify-center hover:scale-110 transition">
+                        <i class="fa-solid fa-xmark text-xs"></i>
+                    </button>
+                </div>
+            `;
+            
+            galleryContainer.prepend(div);
+            
+            setTimeout(() => {
+                statusText.innerText = `TRACKING ACTIVE | ${Object.keys(handStates).length} HANDS`;
+                statusText.classList.remove("text-cyan-400");
+            }, 1000);
         }
 
+        // --- CORE LOGIC ---
         function onResults(results) {
-            // CRITICAL FIX: We do NOT draw results.image onto inkCanvas.
-            // We ONLY clear the cursor canvas so the cursor can move.
             cursorCtx.clearRect(0, 0, cursorCanvas.width, cursorCanvas.height);
 
             if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-                let debugMsg = "";
+                statusText.innerText = `TRACKING ACTIVE | ${results.multiHandLandmarks.length} HANDS`;
+                statusText.classList.replace('text-slate-400', 'text-green-400');
+                sysDot.className = "h-3 w-3 rounded-full bg-green-500 shadow-[0_0_12px_#22c55e]";
+                sysPing.className = "absolute -inset-1 rounded-full bg-green-500 opacity-20 animate-ping";
 
                 results.multiHandLandmarks.forEach((landmarks, i) => {
-                    if (!handStates[i]) handStates[i] = { isDrawing: false, lastPoint: null };
+                    if (!handStates[i]) handStates[i] = { drawing: false, last: null };
                     let state = handStates[i];
 
-                    const thumbTip = landmarks[4];
-                    const indexTip = landmarks[8];
+                    const thumb = landmarks[4];
+                    const index = landmarks[8];
+                    const dist = Math.hypot(thumb.x - index.x, thumb.y - index.y);
                     
-                    // 1. Calculate Pinch
-                    const dist = distance(thumbTip, indexTip);
-                    
-                    // 2. Sticky Logic (Hysteresis)
-                    if (!state.isDrawing && dist < PINCH_THRESHOLD) {
-                        state.isDrawing = true;
-                    } else if (state.isDrawing && dist > RELEASE_THRESHOLD) {
-                        state.isDrawing = false;
-                        state.lastPoint = null; // Lift pen
-                    }
+                    const depth = index.z; 
+                    let normalizedDepth = (depth - MAX_DEPTH) / (MIN_DEPTH - MAX_DEPTH);
+                    normalizedDepth = Math.max(0, Math.min(1, normalizedDepth)); 
+                    const currentWidth = MIN_WIDTH + (normalizedDepth * (MAX_WIDTH - MIN_WIDTH));
 
-                    // 3. Status Text
-                    const colorClass = state.isDrawing ? "text-green-400 font-bold" : "text-gray-400";
-                    debugMsg += `<div class="${colorClass}">Hand ${i}: ${state.isDrawing ? "DRAWING" : "HOVER"} (${dist.toFixed(2)})</div>`;
+                    const x = ((thumb.x + index.x) / 2) * inkCanvas.width;
+                    const y = ((thumb.y + index.y) / 2) * inkCanvas.height;
 
-                    // 4. Coordinates
-                    const x = ((thumbTip.x + indexTip.x) / 2) * inkCanvas.width;
-                    const y = ((thumbTip.y + indexTip.y) / 2) * inkCanvas.height;
+                    drawCursor(x, y, currentWidth, state.drawing);
 
-                    // 5. Draw CURSOR (On Top Layer)
-                    cursorCtx.beginPath();
-                    cursorCtx.arc(x, y, state.isDrawing ? 5 : 10, 0, 2 * Math.PI);
-                    cursorCtx.strokeStyle = "white";
-                    cursorCtx.lineWidth = 2;
-                    cursorCtx.stroke();
-                    if (state.isDrawing) {
-                        cursorCtx.fillStyle = globalColor;
-                        cursorCtx.fill();
-                    }
+                    // Thresholds adjusted for better control
+                    if (dist < 0.05) state.drawing = true;
+                    if (dist > 0.08) state.drawing = false; 
 
-                    // 6. Draw INK (On Middle Layer - Persistent)
-                    if (state.isDrawing) {
-                        if (state.lastPoint) {
+                    if (state.drawing) {
+                        if (state.last) {
                             inkCtx.beginPath();
-                            inkCtx.moveTo(state.lastPoint.x, state.lastPoint.y);
+                            inkCtx.moveTo(state.last.x, state.last.y);
                             inkCtx.lineTo(x, y);
                             inkCtx.strokeStyle = globalColor;
-                            inkCtx.lineWidth = 8; // Thick visible line
+                            inkCtx.lineWidth = currentWidth;
+                            inkCtx.lineCap = "round";
+                            inkCtx.lineJoin = "round";
+                            inkCtx.shadowBlur = currentWidth;
+                            inkCtx.shadowColor = globalColor;
                             inkCtx.stroke();
+                            inkCtx.shadowBlur = 0;
                         }
-                        state.lastPoint = {x, y};
+                        state.last = {x, y};
+                    } else {
+                        state.last = null;
                     }
                 });
-                debugLog.innerHTML = debugMsg;
             } else {
-                debugLog.innerHTML = "NO HANDS DETECTED";
+                statusText.innerText = "SEARCHING FOR HANDS...";
+                statusText.classList.replace('text-green-400', 'text-slate-400');
+                sysDot.className = "h-3 w-3 rounded-full bg-yellow-500";
+                sysPing.className = "hidden";
             }
         }
 
-        function updateColor(val) { globalColor = val; }
-        
-        function wipeInk() { 
-            // Only clear the Ink layer, not the video or cursor
+        function drawCursor(x, y, width, isDrawing) {
+            cursorCtx.beginPath();
+            cursorCtx.arc(x, y, width/2 + 6, 0, Math.PI * 2);
+            cursorCtx.strokeStyle = isDrawing ? globalColor : "rgba(255,255,255,0.5)";
+            cursorCtx.lineWidth = 2;
+            cursorCtx.stroke();
+            
+            if (!isDrawing) {
+                cursorCtx.beginPath();
+                cursorCtx.arc(x, y, 2, 0, Math.PI * 2);
+                cursorCtx.fillStyle = "white";
+                cursorCtx.fill();
+            }
+        }
+
+        function wipeCanvas() {
             inkCtx.clearRect(0, 0, inkCanvas.width, inkCanvas.height);
             handStates = {};
         }
 
-        function saveArt() {
-            // To save, we must composite the Ink onto a white background (or transparent)
-            const dataURL = inkCanvas.toDataURL('image/png');
-            fetch('/upload', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ image: dataURL })
-            });
-            debugLog.innerHTML = "<span class='text-blue-400'>SAVED TO CLOUD!</span>";
-        }
-
-        const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
-        // Optimized for fast tracking
-        hands.setOptions({ maxNumHands: 4, minDetectionConfidence: 0.6, minTrackingConfidence: 0.6 });
+        // --- MEDIAPIPE ---
+        const hands = new Hands({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/${file}`
+        });
+        hands.setOptions({
+            maxNumHands: 2,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
         hands.onResults(onResults);
 
-        const camera = new Camera(videoElement, {
-            onFrame: async () => { await hands.send({image: videoElement}); },
+        const camera = new Camera(video, {
+            onFrame: async () => { await hands.send({image: video}); },
             width: 1280, height: 720
         });
-        camera.start();
+        camera.start().catch(e => {
+            alert("Camera Error: " + e.message);
+        });
     </script>
 </body>
 </html>
